@@ -4,6 +4,8 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { MAX_OUTPUT_BYTES } from "../github/gh";
 import { Cache } from "../cache/cache";
 
+export { repositoryIdFor } from "../../shared/launch";
+
 const execFileAsync = promisify(execFile);
 
 /**
@@ -57,24 +59,6 @@ async function readProjects(paseo: PaseoApi): Promise<ProjectRecord[]> {
 }
 
 /**
- * A repository's identity as both a project key and a git remote spell it:
- * `<host>/<owner>/<name>`, lowercased. The host comes from the item's own URL
- * rather than a hardcoded `github.com`, so a GitHub Enterprise card matches the
- * enterprise project and not a same-named repository on github.com.
- */
-export function repositoryIdFor(repository: string, url: string): string | null {
-  if (!repository.includes("/")) return null;
-  let host: string;
-  try {
-    host = new URL(url).host;
-  } catch {
-    return null;
-  }
-  if (host === "") return null;
-  return `${host}/${repository}`.toLowerCase();
-}
-
-/**
  * Normalises any git remote URL to the same `<host>/<owner>/<name>` form,
  * covering the scp-like `git@host:owner/name.git` that `new URL` cannot parse
  * alongside the `https://` and `ssh://` spellings.
@@ -118,6 +102,11 @@ function normalizeRemoteUrl(remote: string): string | null {
  * nothing rather than failing the search for every other project.
  */
 async function gitRemotes(root: string): Promise<string[]> {
+  return [...new Set((await gitRemoteEntries(root)).map((entry) => entry.repositoryId))];
+}
+
+/** Each remote's name and the repository it points at, fetch and push lines alike. */
+async function gitRemoteEntries(root: string): Promise<{ name: string; repositoryId: string }[]> {
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync("git", ["-C", root, "remote", "-v"], {
@@ -126,14 +115,40 @@ async function gitRemotes(root: string): Promise<string[]> {
   } catch {
     return [];
   }
-  const seen = new Set<string>();
+  const entries: { name: string; repositoryId: string }[] = [];
   for (const line of stdout.split("\n")) {
-    const url = line.trim().split(/\s+/)[1];
-    if (url === undefined) continue;
-    const normalized = normalizeRemoteUrl(url);
-    if (normalized !== null) seen.add(normalized);
+    const [name, url] = line.trim().split(/\s+/);
+    if (name === undefined || url === undefined) continue;
+    const repositoryId = normalizeRemoteUrl(url);
+    if (repositoryId !== null) entries.push({ name, repositoryId });
   }
-  return [...seen];
+  return entries;
+}
+
+/**
+ * The remote in the checkout at `root` that points at this repository — `origin`
+ * when it does, else whichever does, like a fork's `upstream`. That is the
+ * remote a base branch is read from, because the branch list came from this
+ * repository and not from the fork.
+ */
+export async function remoteNameFor(root: string, repositoryId: string): Promise<string | null> {
+  const matching = (await gitRemoteEntries(root)).filter((entry) => entry.repositoryId === repositoryId);
+  return (matching.find((entry) => entry.name === "origin") ?? matching[0])?.name ?? null;
+}
+
+/**
+ * Fetches one branch into its remote-tracking ref, so a branch created on
+ * GitHub after this checkout last fetched still resolves as a worktree base.
+ * Failure is left to the daemon, which reports the missing ref by name.
+ */
+export async function fetchBaseBranch(root: string, remote: string, branch: string): Promise<void> {
+  await execFileAsync(
+    "git",
+    ["-C", root, "fetch", "--quiet", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`],
+    { maxBuffer: MAX_OUTPUT_BYTES, timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+  ).catch((cause: unknown) => {
+    console.warn(`[github-board] could not fetch ${remote}/${branch}`, cause);
+  });
 }
 
 /**

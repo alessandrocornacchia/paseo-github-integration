@@ -9,6 +9,33 @@ pin and a line to read before you move.
 
 ## [Unreleased]
 
+### Added
+
+- **Send a card to another Paseo host.** The launch dialog gains a host chip, next to the isolation,
+  whenever more than one host is connected. The board's own host still launches through the daemon;
+  any other online host is reached with `getPaseoClient` and given the same workspace, agent and
+  timeline row, through one `launchCard` now shared by both paths. The project there is the one
+  keyed by the card's repository, and the agent opens on that host. On Paseo before 0.9.0, which
+  has no `useHosts`, the chip is simply absent.
+- **Choose where a worktree starts.** A New worktree send gains a base chip: any of the
+  repository's branches, read from GitHub, or — on a pull request — the pull request's own branch,
+  which the daemon checks out instead of branching off the default. The base is requested as the
+  remote-tracking ref, which the daemon fetches first, so the agent starts at the remote tip rather
+  than at a local default branch nobody has pulled; on the board's own host the plugin also fetches
+  the branch itself, from the remote that points at the card's repository (a fork's `upstream`).
+- **The last host and base are remembered**, the host with the other launch defaults and the base
+  per repository, separately for pull requests and for issues and discussions.
+
+### Fixed
+
+- The sidebar item, settings screen, command and timeline row used the `Github` Lucide icon, which
+  newer Paseo apps no longer ship — the plugin failed to load with "Unknown Lucide icon: Github".
+  They use `GitBranch`.
+
+### Changed
+
+- The `@getpaseo/*` development dependencies move to 0.11.1, for the multi-host client API.
+
 ## [1.0.1] — 2026-09-12
 
 ### Changed

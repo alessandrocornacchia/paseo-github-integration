@@ -13,6 +13,13 @@ import type { Styles } from "../theme/use-styles";
 import { LABEL_MENU_MAX_HEIGHT, LABEL_MENU_WIDTH, MENU_MARGIN } from "./label-menu";
 import type { LabelMenuTarget } from "./label-menu";
 
+/** The card the launch dialog is open on, its rendered prompt, and whether it is a pull request. */
+export interface SendTarget {
+  item: BoardItem;
+  prompt: string;
+  pullRequest: boolean;
+}
+
 /**
  * What `useBoardOverlays` needs from the other board hooks, threaded through
  * rather than reached for.
@@ -38,8 +45,8 @@ export interface UseBoardOverlaysResult {
   labelTarget: LabelMenuTarget | null;
   setLabelTarget: (next: LabelMenuTarget | null) => void;
   applyItemLabels: (itemId: string, labels: string[]) => void;
-  sendTarget: { item: BoardItem; prompt: string } | null;
-  setSendTarget: (next: { item: BoardItem; prompt: string } | null) => void;
+  sendTarget: SendTarget | null;
+  setSendTarget: (next: SendTarget | null) => void;
   handleLaunched: (result: LaunchResult) => void;
   rootRef: React.RefObject<View | null>;
   showSettings: boolean;
@@ -65,7 +72,7 @@ export function useBoardOverlays(
   /** The surface shows one of two things; plugins cannot route between surfaces. */
   const [showSettings, setShowSettings] = useState(false);
   /** The card the launch dialog is open on, with its prompt already rendered. */
-  const [sendTarget, setSendTarget] = useState<{ item: BoardItem; prompt: string } | null>(null);
+  const [sendTarget, setSendTarget] = useState<SendTarget | null>(null);
   /** The card the label menu is open on, and where on this surface to draw it. */
   const [labelTarget, setLabelTarget] = useState<LabelMenuTarget | null>(null);
   /** The card the detail panel is open on. Its column picks the send template. */
@@ -211,7 +218,11 @@ export function useBoardOverlays(
       const projectId = board?.repositoryProjects[item.repository] ?? null;
       const template =
         promptValues === null ? item.url : templateFor(promptValues, type, projectId);
-      setSendTarget({ item, prompt: renderTemplate(template, item) });
+      setSendTarget({
+        item,
+        prompt: renderTemplate(template, item),
+        pullRequest: type === "draft-prs" || type === "open-prs",
+      });
     },
     [board, promptValues],
   );
@@ -237,12 +248,16 @@ export function useBoardOverlays(
   const handleLaunched = useCallback(
     (result: LaunchResult) => {
       setSendTarget(null);
-      toast.show(`Created “${result.workspaceName}” in ${result.projectName}. Opening it…`, {
+      const where =
+        result.serverId === props.host.id ? result.projectName : `${result.projectName} on ${result.hostLabel}`;
+      toast.show(`Created “${result.workspaceName}” in ${where}. Opening it…`, {
         variant: "success",
       });
-      props.navigation?.openAgent({ agentId: result.agentId });
+      // `serverId` routes to the host the agent actually runs on, which is not
+      // this surface's own when the dialog sent the card elsewhere.
+      props.navigation?.openAgent({ agentId: result.agentId, serverId: result.serverId });
     },
-    [props.navigation, toast],
+    [props.host.id, props.navigation, toast],
   );
 
   const renderRow = useCallback(

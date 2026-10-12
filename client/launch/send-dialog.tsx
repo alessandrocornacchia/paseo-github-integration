@@ -25,10 +25,10 @@ export { readProviders, resolveConfiguration, toChoice };
  * card: where the workspace is cut, which agent runs it, how hard it thinks,
  * which permission mode it runs under, and the first message.
  *
- * The host is not a choice here. A plugin surface is bound to the daemon that
- * contributed it — `usePaseo()` is that daemon's client and nothing reaches
- * another one — and the board itself is that host's `gh`. Switching hosts is the
- * surface header's job, so the dialog names the host rather than offering it.
+ * The host is a choice too, when more than one is connected. The board itself
+ * stays bound to the daemon that contributed it — the cards are that host's
+ * `gh` — but the agent can run on any online host that has the repository as a
+ * project; `useLaunchTarget` resolves which, and where the project is there.
  *
  * The dialog's own state — the project, the provider snapshot, the settled
  * configuration, which popover is open, the launch call — lives in
@@ -38,7 +38,8 @@ export { readProviders, resolveConfiguration, toChoice };
 export function SendDialog({
   item,
   initialPrompt,
-  hostLabel,
+  pullRequest,
+  boardHost,
   styles,
   accentColor,
   onCancel,
@@ -47,19 +48,29 @@ export function SendDialog({
   item: BoardItem;
   /** The card's prompt template, already rendered. The user may rewrite it. */
   initialPrompt: string;
-  hostLabel: string;
+  /** Whether the card is a pull request, which can start on its own branch. */
+  pullRequest: boolean;
+  /** The host the board belongs to, and the dialog's default target. */
+  boardHost: { id: string; label: string };
   styles: Styles;
   accentColor: string;
   onCancel: () => void;
   onLaunched: (result: LaunchResult) => void;
 }) {
-  const dialog = useSendDialogState({ item, initialPrompt, onCancel, onLaunched });
+  const dialog = useSendDialogState({
+    item,
+    pullRequest,
+    boardHost,
+    initialPrompt,
+    onCancel,
+    onLaunched,
+  });
 
   return (
     <Modal title="New workspace" open onOpenChange={dialog.requestClose}>
       <Modal.Content contentContainerStyle={styles.dialogBody}>
         <Text style={styles.subtle} numberOfLines={1}>
-          {hostLabel}
+          {dialog.hostLabel}
           {dialog.project === null ? "" : ` · ${dialog.project.name}`}
         </Text>
         <Text style={styles.modalBody} numberOfLines={2}>
@@ -73,6 +84,18 @@ export function SendDialog({
           open={dialog.picker === "isolation"}
           onToggle={() => dialog.togglePicker("isolation")}
           onSelect={dialog.selectIsolation}
+          hosts={dialog.hosts}
+          hostId={dialog.hostId}
+          hostLabel={dialog.hostLabel}
+          hostOpen={dialog.picker === "host"}
+          onToggleHost={() => dialog.togglePicker("host")}
+          onSelectHost={dialog.selectHost}
+          baseChoices={dialog.baseChoices}
+          baseId={dialog.baseId}
+          baseLabel={dialog.baseLabel}
+          baseOpen={dialog.picker === "base"}
+          onToggleBase={() => dialog.togglePicker("base")}
+          onSelectBase={dialog.selectBase}
         />
 
         {/* The host's input, not React Native's: it registers focus with the

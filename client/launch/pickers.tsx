@@ -25,7 +25,7 @@ export interface ProviderChoice extends Choice {
 }
 
 /** Which control's popover is open; only ever one at a time. */
-export type PickerId = "isolation" | "model" | "thinking" | "mode";
+export type PickerId = "host" | "isolation" | "base" | "model" | "thinking" | "mode";
 
 export const ISOLATION_CHOICES: readonly Choice[] = [
   { id: "local", label: "Local", description: "Work in the project's own checkout." },

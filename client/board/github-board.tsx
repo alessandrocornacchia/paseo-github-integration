@@ -190,7 +190,8 @@ export function GitHubBoard(props: PluginSurfaceProps) {
           key={sendTarget.item.id}
           item={sendTarget.item}
           initialPrompt={sendTarget.prompt}
-          hostLabel={props.host.label}
+          pullRequest={sendTarget.pullRequest}
+          boardHost={props.host}
           styles={styles}
           accentColor={props.theme.colors.accent}
           onCancel={() => setSendTarget(null)}

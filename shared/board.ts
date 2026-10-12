@@ -353,6 +353,12 @@ export const LaunchDefaultsSchema = z.object({
   /** The model's thinking level, when it has any. */
   thinkingOptionId: z.string().nullable(),
   isolation: IsolationSchema,
+  /**
+   * The Paseo host the last card was sent to, by the app's `serverId`. Null
+   * means the host the board itself belongs to — also the fallback when the
+   * saved one is no longer connected.
+   */
+  hostId: z.string().nullable(),
 });
 
 export type LaunchDefaults = z.output<typeof LaunchDefaultsSchema>;
@@ -392,6 +398,67 @@ export const sendOptions = defineRpc({
 });
 
 /**
+ * Where a new worktree starts: the card's own pull request branch, checked out
+ * by the daemon, or a new branch cut from one of the repository's branches.
+ * Ignored for a Local send, which works in the checkout as it stands.
+ */
+export const BaseChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("pull-request") }),
+  z.object({ kind: z.literal("branch"), name: z.string().min(1) }),
+]);
+
+export type BaseChoice = z.output<typeof BaseChoiceSchema>;
+
+/** A card's repository, and whether the card is a pull request: what a base is remembered by. */
+const BaseKeySchema = z.object({
+  repository: z.string(),
+  url: z.string(),
+  pullRequest: z.boolean(),
+});
+
+/**
+ * The branches a worktree can start from, read from GitHub with the board's own
+ * `gh` — the same list whichever host the card is sent to — plus the base this
+ * repository was last sent with, for this kind of card.
+ */
+export const listBranches = defineRpc({
+  name: "board.list-branches",
+  input: BaseKeySchema,
+  output: z.object({
+    defaultBranch: z.string().nullable(),
+    /** Most recently committed first, capped at 100; the default is always included. */
+    branches: z.array(z.string()),
+    remembered: BaseChoiceSchema.nullable(),
+  }),
+});
+
+/**
+ * What the last send was configured with, on its own. The dialog reads it
+ * before it knows which host it is sending to — `sendOptions` needs a project
+ * on *this* daemon, which a card sent to another host may not have.
+ */
+export const launchDefaults = defineRpc({
+  name: "board.launch-defaults",
+  input: z.object({}),
+  output: LaunchDefaultsSchema,
+});
+
+/**
+ * Saves the next card's defaults after a send that did not go through
+ * `sendToChat` — one launched on another host straight from the dialog, which
+ * this daemon never saw.
+ */
+export const saveLaunchDefaults = defineRpc({
+  name: "board.save-launch-defaults",
+  input: z.object({
+    launch: LaunchDefaultsSchema,
+    /** Null for a Local send, which leaves the remembered base alone. */
+    base: BaseKeySchema.extend({ choice: BaseChoiceSchema }).nullable(),
+  }),
+  output: z.object({ ok: z.literal(true) }),
+});
+
+/**
  * Hands one card to a fresh workspace and starts the conversation: the
  * repository is matched to a Paseo project on the daemon, a workspace is
  * created on that project (locally or as a worktree), an agent is created in it
@@ -427,6 +494,12 @@ export const sendToChat = defineRpc({
     model: z.string().min(1),
     modeId: z.string().nullable(),
     thinkingOptionId: z.string().nullable(),
+    /** The host's `serverId`, saved with the defaults; this daemon is always the target. */
+    hostId: z.string().nullable(),
+    /** Whether the card is a pull request, which is what its base is remembered under. */
+    pullRequest: z.boolean(),
+    /** Where the worktree starts; null for a Local send. */
+    base: BaseChoiceSchema.nullable(),
   }),
   output: z.object({
     workspaceId: z.string(),

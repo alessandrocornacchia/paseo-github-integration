@@ -32,7 +32,10 @@ date that answers "what has actually moved". Each card reports the date the list
 rendered from Markdown, with images proxied through the daemon. From there: approve, merge with any
 method the repository allows, edit labels, open on GitHub — or **send to chat**, which starts a
 Paseo agent with a prompt template of your choosing, in a workspace of your choosing, with the
-issue or pull request pinned to the top of the conversation.
+issue or pull request pinned to the top of the conversation. The agent can run on any connected
+Paseo host that has the repository as a project, and a new worktree can start from any branch — or,
+for a pull request, from the pull request's own branch. The last host and, per repository, the last
+base are what the next card opens on.
 
 ![One pull request open in the detail panel: title, author, branches, checks, the Approve, Merge,
 Send to chat and Open on GitHub actions, and the rendered body.](images/detail-panel.png)
@@ -86,6 +89,9 @@ inputs.paseo-github.url = "github:alysnnix/paseo-github-integration";
 - **GitHub search backs the sweep**, so its rules apply: results are capped per query, and a
   watched owner with thousands of open items shows the most recently updated slice rather than all
   of them.
+- **Another host is matched by `origin` alone.** On the board's own host a fork is found through
+  its `upstream` remote too; on any other host the project's `origin` has to be the card's
+  repository, and a base branch has to have been fetched there at least once.
 - **One GitHub account at a time**, the one `gh` is authenticated as. There is no account switcher.
 - **Images hosted outside GitHub are not loaded**, deliberately: they would report your IP address
   to whoever wrote the comment. They render as a link you can open yourself.

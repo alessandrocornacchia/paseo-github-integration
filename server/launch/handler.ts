@@ -1,13 +1,18 @@
 import type { z } from "zod";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import type { sendOptions, sendToChat } from "../../shared/board";
-import { BOARD_ITEM_TIMELINE_KIND, BOARD_ITEM_TIMELINE_VERSION } from "../../shared/timeline";
-import { readSettings, updateSettings } from "../settings/settings";
-import { findProject, repositoryIdFor } from "./project-index";
+import type {
+  BaseChoice,
+  LaunchDefaults,
+  launchDefaults,
+  saveLaunchDefaults,
+  sendOptions,
+  sendToChat,
+} from "../../shared/board";
+import { launchCard, repositoryIdFor } from "../../shared/launch";
+import type { WorktreeStart } from "../../shared/launch";
+import { baseKey, readSettings, updateSettings } from "../settings/settings";
+import { fetchBaseBranch, findProject, remoteNameFor } from "./project-index";
 import type { PaseoApi, ProjectRecord } from "./project-index";
-
-/** Workspace titles are capped at the same length the daemon caps agent titles. */
-const MAX_TITLE_CHARS = 200;
 
 /**
  * The project one card can be sent to, or a refusal that says what to do about
@@ -56,110 +61,85 @@ export async function sendOptionsHandler(
   };
 }
 
+export async function launchDefaultsHandler(
+  _input: z.output<typeof launchDefaults.input>,
+): Promise<z.input<typeof launchDefaults.output>> {
+  return (await readSettings()).launch;
+}
+
+export async function saveLaunchDefaultsHandler({
+  launch,
+  base,
+}: z.output<typeof saveLaunchDefaults.input>): Promise<z.input<typeof saveLaunchDefaults.output>> {
+  await saveLaunch(launch, base === null ? null : { ...base, base: base.choice });
+  return { ok: true };
+}
+
+/**
+ * Saves the next card's defaults and, for a worktree send, the base it used —
+ * merged into the remembered bases rather than replacing them, so one
+ * repository's choice never forgets another's.
+ */
+async function saveLaunch(
+  launch: LaunchDefaults,
+  base: { repository: string; url: string; pullRequest: boolean; base: BaseChoice } | null,
+): Promise<void> {
+  const repositoryId = base === null ? null : repositoryIdFor(base.repository, base.url);
+  if (base === null || repositoryId === null) {
+    await updateSettings({ launch });
+    return;
+  }
+  const { bases } = await readSettings();
+  await updateSettings({
+    launch,
+    bases: { ...bases, [baseKey(repositoryId, base.pullRequest)]: base.base },
+  });
+}
+
+/**
+ * A send to the host this board belongs to. The workspace and agent are made by
+ * `launchCard`, the same function the dialog runs itself for a send to any
+ * other connected host; what only this side can do is find the project through
+ * a fork's other git remotes, fetch a base branch the checkout has never seen,
+ * and save the next card's defaults in the same round trip.
+ */
 export async function sendToChatHandler(
-  {
-    repository,
-    number,
-    title,
-    url,
-    author,
-    labels,
-    prompt,
-    isolation,
-    provider,
-    model,
-    modeId,
-    thinkingOptionId,
-  }: z.output<typeof sendToChat.input>,
+  { hostId, pullRequest, base, ...input }: z.output<typeof sendToChat.input>,
   { paseo }: PluginHandlerContext,
 ): Promise<z.input<typeof sendToChat.output>> {
-  const project = await requireProject(paseo, repository, url);
-  if (isolation === "worktree" && project.kind !== "git") {
-    throw new Error(`${project.displayName} is not a git checkout, so it cannot be worktreed.`);
-  }
-
-  const trimmed = title.trim();
-  /**
-   * `firstAgentContext` is passed here and *only* here, because this handler
-   * really does create the agent it promises. The daemon reads it two ways: as
-   * naming context for the workspace and its branch, and as `expectsInitialAgent`,
-   * which flips the new workspace to an optimistic `running`. A caller that
-   * passes it and then creates nothing leaves a workspace spinning until it
-   * settles on `done`.
-   */
-  const workspace = await paseo.workspaces.create({
-    title: (trimmed === "" ? `${repository} #${number}` : trimmed).slice(0, MAX_TITLE_CHARS),
-    firstAgentContext: { prompt, attachments: [] },
-    source:
-      isolation === "worktree"
-        ? {
-            // No `worktreeSlug`: the daemon mints a mnemonic one, and then
-            // renames the branch after the prompt once the agent is running.
-            kind: "worktree",
-            cwd: project.rootPath,
-            projectId: project.projectId,
-          }
-        : { kind: "directory", path: project.rootPath, projectId: project.projectId },
-  });
-
-  /**
-   * The agent is created *in* the workspace, so the SDK places it on the
-   * workspace's own directory — the worktree's path, not the project root, when
-   * one was cut. `prompt` rides along as the first message rather than being
-   * sent afterwards, so there is no window where the workspace exists with a
-   * silent agent in it.
-   */
-  const agent = await workspace.agents
-    .create({
-      config: {
-        // `provider/model`, which is the only spelling the SDK accepts.
-        provider: `${provider}/${model}`,
-        ...(modeId === null ? {} : { modeId }),
-        ...(thinkingOptionId === null ? {} : { thinkingOptionId }),
-      },
-      prompt,
-    })
-    .catch((cause: unknown) => {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      throw new Error(
-        `Workspace “${workspace.name ?? project.displayName}” was created, but the agent could not be started: ${detail}`,
-      );
-    });
-
-  /**
-   * The card the agent is working on, as a persisted row in its own transcript.
-   *
-   * It lands *after* the opening prompt rather than above it, because the prompt
-   * rides along with `agents.create` and there is no agent to append to until
-   * that has resolved. That ordering is the price of not opening a window where
-   * the workspace exists with a silent agent in it, which matters more.
-   *
-   * Deliberately not fatal. By this point the workspace and the agent both
-   * exist and the prompt has been delivered — the send the user asked for has
-   * happened. Failing it here would report an error for a launch that worked and
-   * invite the user to send the card a second time, which would cut a second
-   * worktree. A missing row costs the transcript its header and nothing else.
-   */
-  await agent.timeline
-    .append({
-      type: "plugin",
-      id: `${BOARD_ITEM_TIMELINE_KIND}:${repository}#${number}`,
-      kind: BOARD_ITEM_TIMELINE_KIND,
-      version: BOARD_ITEM_TIMELINE_VERSION,
-      data: { repository, number, title, url, author, labels },
-    })
-    .catch((cause: unknown) => {
-      console.warn("[github-board] could not append the timeline row", cause);
-    });
+  const project = await requireProject(paseo, input.repository, input.url);
+  const start = await resolveStart(project.rootPath, input.repository, input.url, base);
+  const result = await launchCard(paseo, project, { ...input, start });
 
   // Saved only once the send has actually worked, so a configuration that the
   // host rejected is not what the next card opens on.
-  await updateSettings({ launch: { provider, model, modeId, thinkingOptionId, isolation } });
+  const { provider, model, modeId, thinkingOptionId, isolation } = input;
+  await saveLaunch(
+    { provider, model, modeId, thinkingOptionId, isolation, hostId },
+    isolation === "worktree" && base !== null
+      ? { repository: input.repository, url: input.url, pullRequest, base }
+      : null,
+  );
 
-  return {
-    workspaceId: workspace.id,
-    workspaceName: workspace.name ?? project.displayName,
-    projectName: project.displayName,
-    agentId: agent.id,
-  };
+  return result;
+}
+
+/**
+ * The daemon is asked for the base as a remote-tracking ref on the remote that
+ * points at the card's repository — a fork's `upstream`, not its `origin` — and
+ * that ref is fetched first, so a branch the checkout has never seen resolves.
+ * No base, or no such remote, leaves the daemon on the default branch.
+ */
+async function resolveStart(
+  root: string,
+  repository: string,
+  url: string,
+  base: BaseChoice | null,
+): Promise<WorktreeStart> {
+  if (base?.kind === "pull-request") return { kind: "pull-request" };
+  const repositoryId = repositoryIdFor(repository, url);
+  const remote = repositoryId === null ? null : await remoteNameFor(root, repositoryId);
+  if (base === null || remote === null) return { kind: "default" };
+  await fetchBaseBranch(root, remote, base.name);
+  return { kind: "ref", ref: `refs/remotes/${remote}/${base.name}` };
 }

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { z } from "zod";
 import type {
+  BaseChoice,
   LaunchDefaults,
   PromptSet,
   PromptSettings,
@@ -49,6 +50,7 @@ const EMPTY_LAUNCH: LaunchDefaults = {
   modeId: null,
   thinkingOptionId: null,
   isolation: "local",
+  hostId: null,
 };
 
 /**
@@ -88,6 +90,13 @@ export interface Settings {
   login: string | null;
   launch: LaunchDefaults;
   /**
+   * The base each repository was last sent with, keyed `<host>/<owner>/<name>`
+   * for issues and discussions and `…#pr` for pull requests — a pull request
+   * usually wants its own branch, an issue a branch to start from, so one
+   * choice must not overwrite the other.
+   */
+  bases: Record<string, BaseChoice>;
+  /**
    * Non-null only on a file written before the move, and only until the app
    * acknowledges having taken them. Every write puts them back untouched, so a
    * login change made before the app ever loads the board cannot drop them.
@@ -98,6 +107,7 @@ export interface Settings {
 const EMPTY_SETTINGS: Settings = {
   login: null,
   launch: { ...EMPTY_LAUNCH },
+  bases: {},
   legacy: null,
 };
 
@@ -174,7 +184,27 @@ function readLaunch(value: unknown): LaunchDefaults {
     modeId: asString(raw.modeId),
     thinkingOptionId: asString(raw.thinkingOptionId),
     isolation: raw.isolation === "worktree" ? "worktree" : "local",
+    hostId: asString(raw.hostId),
   };
+}
+
+/** Remembered bases, dropping any entry an older or hand-edited file got wrong. */
+function readBases(value: unknown): Record<string, BaseChoice> {
+  if (typeof value !== "object" || value === null) return {};
+  const bases: Record<string, BaseChoice> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const entry = raw as Record<string, unknown>;
+    if (entry.kind === "pull-request") bases[key] = { kind: "pull-request" };
+    const name = asString(entry.name);
+    if (entry.kind === "branch" && name !== null) bases[key] = { kind: "branch", name };
+  }
+  return bases;
+}
+
+/** The key a card's base is remembered under; see `Settings.bases`. */
+export function baseKey(repositoryId: string, pullRequest: boolean): string {
+  return pullRequest ? `${repositoryId}#pr` : repositoryId;
 }
 
 export async function readSettings(): Promise<Settings> {
@@ -187,6 +217,7 @@ export async function readSettings(): Promise<Settings> {
       return {
         login: typeof login === "string" && login.trim() !== "" ? login.trim() : null,
         launch: readLaunch(record.launch),
+        bases: readBases(record.bases),
         legacy: readLegacy(record),
       };
     } catch {

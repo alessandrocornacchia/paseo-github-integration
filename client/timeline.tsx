@@ -81,7 +81,7 @@ export function BoardTimelineCard({
       onPress={() => openExternalUrl(url)}
     >
       <View style={styles.header}>
-        <Icon name="Github" size={14} color={theme.colors.foregroundMuted} />
+        <Icon name="GitBranch" size={14} color={theme.colors.foregroundMuted} />
         <Text style={styles.slug} numberOfLines={1}>
           {repository} #{number}
         </Text>

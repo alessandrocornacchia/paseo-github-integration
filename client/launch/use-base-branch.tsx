@@ -4,10 +4,21 @@ import { useRpc } from "@getpaseo/plugin/client";
 import type { BaseChoice, BoardItem } from "../../shared/board";
 import { listBranches } from "../../shared/board";
 import type { WorktreeStart } from "../../shared/launch";
+import type { ChipMenu } from "./isolation-control";
 import type { Choice } from "./pickers";
 
 /** The menu id of "this pull request's own branch"; branches are listed by name. */
 const PULL_REQUEST_ID = ":pull-request";
+
+/** What a worktree started from a branch does with it: cut a new one, or take it as is. */
+export const BRANCH_MODE_CHOICES: readonly Choice[] = [
+  { id: "branch-off", label: "New branch", description: "Cut a new branch from it, as Paseo does." },
+  {
+    id: "checkout",
+    label: "Same branch",
+    description: "Check that branch itself out, with no new branch on top.",
+  },
+];
 
 /**
  * The start a *remote* host is asked for. Its project was matched by its own
@@ -17,9 +28,38 @@ const PULL_REQUEST_ID = ":pull-request";
  */
 export function remoteStartFor(base: BaseChoice | null): WorktreeStart {
   if (base === null) return { kind: "default" };
-  return base.kind === "pull-request"
-    ? { kind: "pull-request" }
+  if (base.kind === "pull-request") return { kind: "pull-request" };
+  return base.checkout === true
+    ? { kind: "branch", branch: base.name }
     : { kind: "ref", ref: `refs/remotes/origin/${base.name}` };
+}
+
+/** The branch-mode chip's menu, or null while there is no branch to take as is. */
+export function branchModeMenu(
+  mode: BaseBranch["branchMode"],
+  onSelect: (id: string) => void,
+): ChipMenu | null {
+  if (mode === null) return null;
+  const label = BRANCH_MODE_CHOICES.find((choice) => choice.id === mode)?.label ?? "";
+  return { choices: BRANCH_MODE_CHOICES, selectedId: mode, label, onSelect };
+}
+
+function branchChoice(name: string, checkout: boolean): BaseChoice {
+  return checkout ? { kind: "branch", name, checkout: true } : { kind: "branch", name };
+}
+
+/** What one base reads as: its menu id, its branch mode, and the branch it would check out. */
+function describeBase(base: BaseChoice | null, pullRequestHead: string | null) {
+  if (base === null) return { baseId: null, branchMode: null, checkoutBranch: null };
+  if (base.kind === "pull-request") {
+    return { baseId: PULL_REQUEST_ID, branchMode: null, checkoutBranch: pullRequestHead };
+  }
+  const checkout = base.checkout === true;
+  return {
+    baseId: base.name,
+    branchMode: checkout ? ("checkout" as const) : ("branch-off" as const),
+    checkoutBranch: checkout ? base.name : null,
+  };
 }
 
 /** What `useBaseBranch` exposes to the dialog. */
@@ -30,6 +70,16 @@ export interface BaseBranch {
   label: string;
   choices: readonly Choice[];
   selectBase: (id: string) => void;
+  /** Null unless the base is a branch, the only start that can be cut or taken as is. */
+  branchMode: "branch-off" | "checkout" | null;
+  selectBranchMode: (id: string) => void;
+  /** The pull request's head branch, when it is in the card's own repository. */
+  pullRequestHead: string | null;
+  /**
+   * The branch this start would check out rather than cut, which no worktree
+   * may already hold: the pull request's head, or a branch taken as is.
+   */
+  checkoutBranch: string | null;
 }
 
 /**
@@ -54,12 +104,13 @@ export function useBaseBranch({
     defaultBranch: string | null;
     branches: string[];
     remembered: BaseChoice | null;
+    pullRequestHead: string | null;
   } | null>(null);
   const [chosen, setChosen] = useState<BaseChoice | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    load({ repository: item.repository, url: item.url, pullRequest })
+    load({ repository: item.repository, url: item.url, pullRequest, number: item.number })
       .then((result) => {
         if (!cancelled) setListed(result);
       })
@@ -71,7 +122,7 @@ export function useBaseBranch({
     return () => {
       cancelled = true;
     };
-  }, [item.repository, item.url, load, pullRequest]);
+  }, [item.number, item.repository, item.url, load, pullRequest]);
 
   const choices = useMemo<Choice[]>(() => {
     if (listed === null) return [];
@@ -111,16 +162,35 @@ export function useBaseBranch({
     base = offered(chosen) ? chosen : offered(listed.remembered) ? listed.remembered : fallback;
   }
 
-  const selectBase = useCallback((id: string) => {
-    setChosen(id === PULL_REQUEST_ID ? { kind: "pull-request" } : { kind: "branch", name: id });
-  }, []);
+  const pullRequestHead = listed?.pullRequestHead ?? null;
+  const { baseId, branchMode, checkoutBranch } = describeBase(base, pullRequestHead);
 
-  const baseId = base === null ? null : base.kind === "pull-request" ? PULL_REQUEST_ID : base.name;
+  // A new base keeps the branch mode the old one had, so the toggle reads as a
+  // setting of the chip beside it rather than resetting under the user.
+  const checkout = branchMode === "checkout";
+  const selectBase = useCallback(
+    (id: string) => setChosen(id === PULL_REQUEST_ID ? { kind: "pull-request" } : branchChoice(id, checkout)),
+    [checkout],
+  );
+
+  const selectBranchMode = useCallback(
+    (id: string) => {
+      if (base?.kind === "branch") setChosen(branchChoice(base.name, id === "checkout"));
+    },
+    [base],
+  );
+
+  // Taken as is, the chip names the branch itself rather than "From" it.
+  const listedLabel = choices.find((choice) => choice.id === baseId)?.label ?? "Default branch";
   return {
     base,
     baseId,
-    label: choices.find((choice) => choice.id === baseId)?.label ?? "Default branch",
+    label: checkout && baseId !== null ? baseId : listedLabel,
     choices,
     selectBase,
+    branchMode,
+    selectBranchMode,
+    pullRequestHead,
+    checkoutBranch,
   };
 }

@@ -23,10 +23,24 @@ pin and a line to read before you move.
   remote-tracking ref, which the daemon fetches first, so the agent starts at the remote tip rather
   than at a local default branch nobody has pulled; on the board's own host the plugin also fetches
   the branch itself, from the remote that points at the card's repository (a fork's `upstream`).
+- **Send to a checkout that already exists.** Existing checkout, a third isolation beside Local and
+  New worktree, joins a worktree or branch already on the host as it stands — no new worktree, no
+  new branch. It lists every `git worktree list` entry on the board's own host and the checkouts
+  Paseo has a workspace on elsewhere, preselects the one on the pull request's head branch, and
+  adds the agent to the workspace already open there rather than opening a second one.
+- **Check a branch out without forking it.** A New worktree started from a branch gains a Same
+  branch / New branch chip: Same branch checks that branch itself out (the daemon's
+  checkout-branch), creating the local branch from the card's repository when there is none yet.
 - **The last host and base are remembered**, the host with the other launch defaults and the base
   per repository, separately for pull requests and for issues and discussions.
 
 ### Fixed
+
+- A worktree send no longer forks a branch behind your back. The daemon answers a checkout of a
+  branch some worktree already holds by cutting `<branch>-1` from it, and a pull request whose head
+  branch is already local by checking it out as `<head>-1`. The dialog now refuses the first, naming
+  the checkout to choose under Existing checkout, and on the board's own host the second checks out
+  the local branch itself.
 
 - The sidebar item, settings screen, command and timeline row used the `Github` Lucide icon, which
   newer Paseo apps no longer ship — the plugin failed to load with "Unknown Lucide icon: Github".

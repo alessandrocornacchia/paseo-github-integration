@@ -25,14 +25,27 @@ export interface ProviderChoice extends Choice {
 }
 
 /** Which control's popover is open; only ever one at a time. */
-export type PickerId = "host" | "isolation" | "base" | "model" | "thinking" | "mode";
+export type PickerId =
+  | "host"
+  | "isolation"
+  | "base"
+  | "branch-mode"
+  | "checkout"
+  | "model"
+  | "thinking"
+  | "mode";
 
 export const ISOLATION_CHOICES: readonly Choice[] = [
   { id: "local", label: "Local", description: "Work in the project's own checkout." },
   {
     id: "worktree",
     label: "New worktree",
-    description: "Cut a fresh git worktree on its own branch.",
+    description: "Cut a fresh git worktree, on a new branch or an existing one.",
+  },
+  {
+    id: "existing",
+    label: "Existing checkout",
+    description: "Join a worktree or branch already on the host, as it stands.",
   },
 ];
 

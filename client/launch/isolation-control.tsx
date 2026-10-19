@@ -3,104 +3,115 @@ import { View } from "react-native";
 import type { Isolation } from "../../shared/board";
 import type { Styles } from "../theme/use-styles";
 import { ChoicePopover, ControlChip, ISOLATION_CHOICES } from "./pickers";
-import type { Choice } from "./pickers";
+import type { Choice, PickerId } from "./pickers";
+import { BRANCH_MODE_CHOICES } from "./use-base-branch";
 import type { SendProject } from "./use-send-dialog";
+
+/** One chip and the menu it opens, as the row below lays them out. */
+export interface ChipMenu {
+  choices: readonly Choice[];
+  selectedId: string | null;
+  label: string;
+  onSelect: (id: string) => void;
+}
 
 /**
  * Where the workspace is cut: the dialog's first control row. It holds the host
  * the card is sent to — shown only when more than one is connected, so a
- * single-host setup sees the dialog it always had — the isolation, and, for a
- * new worktree, the branch it starts from. A non-git project has no worktree to
- * cut, so that chip reads Local and the press is disabled rather than offering
- * a choice that fails.
+ * single-host setup sees the dialog it always had — the isolation, and what
+ * that isolation needs next: for a new worktree, the branch it starts from and,
+ * when that is a branch, whether a new branch is cut from it or it is checked
+ * out itself; for an existing checkout, which one. A non-git project has
+ * neither to offer, so that chip reads Local and the press is disabled rather
+ * than offering a choice that fails.
  *
  * Its own row, out-stacking the scrim so its popover stays clickable — the
- * row raises above the second control row's while its own popover is open.
+ * row raises above the second control row's while one of its popovers is open.
  */
 export function IsolationControl({
   styles,
   project,
   isolation,
-  open,
-  onToggle,
-  onSelect,
-  hosts,
-  hostId,
-  hostLabel,
-  hostOpen,
-  onToggleHost,
-  onSelectHost,
-  baseChoices,
-  baseId,
-  baseLabel,
-  baseOpen,
-  onToggleBase,
-  onSelectBase,
+  picker,
+  onTogglePicker,
+  onSelectIsolation,
+  host,
+  base,
+  branchMode,
+  checkout,
 }: {
   styles: Styles;
   project: SendProject | null;
   isolation: Isolation;
-  open: boolean;
-  onToggle: () => void;
-  onSelect: (id: string) => void;
-  hosts: readonly Choice[];
-  hostId: string;
-  hostLabel: string;
-  hostOpen: boolean;
-  onToggleHost: () => void;
-  onSelectHost: (id: string) => void;
-  baseChoices: readonly Choice[];
-  baseId: string | null;
-  baseLabel: string;
-  baseOpen: boolean;
-  onToggleBase: () => void;
-  onSelectBase: (id: string) => void;
+  picker: PickerId | null;
+  onTogglePicker: (id: PickerId) => void;
+  onSelectIsolation: (id: string) => void;
+  host: ChipMenu;
+  base: ChipMenu;
+  /** Null unless the worktree starts from a branch. */
+  branchMode: ChipMenu | null;
+  checkout: ChipMenu;
 }) {
-  const showBase = isolation === "worktree";
+  const chips: { id: PickerId; menu: ChipMenu; shown: boolean }[] = [
+    { id: "base", menu: base, shown: isolation === "worktree" },
+    {
+      id: "branch-mode",
+      menu: branchMode ?? { choices: BRANCH_MODE_CHOICES, selectedId: null, label: "", onSelect: () => {} },
+      shown: isolation === "worktree" && branchMode !== null,
+    },
+    { id: "checkout", menu: checkout, shown: isolation === "existing" },
+  ];
+  const raised = picker === "host" || picker === "isolation" || chips.some((chip) => chip.id === picker);
   return (
-    <View style={[styles.controlRow, open || hostOpen || baseOpen ? styles.controlRowRaised : null]}>
-      {hosts.length > 1 ? (
-        <ControlChip styles={styles} label={hostLabel} onPress={onToggleHost} />
+    <View style={[styles.controlRow, raised ? styles.controlRowRaised : null]}>
+      {host.choices.length > 1 ? (
+        <ControlChip styles={styles} label={host.label} onPress={() => onTogglePicker("host")} />
       ) : null}
       <ControlChip
         styles={styles}
-        label={isolation === "worktree" ? "New worktree" : "Local"}
+        label={ISOLATION_CHOICES.find((choice) => choice.id === isolation)?.label ?? "Local"}
         disabled={project === null || !project.supportsWorktree}
-        onPress={onToggle}
+        onPress={() => onTogglePicker("isolation")}
       />
-      {open ? (
+      {picker === "isolation" ? (
         <ChoicePopover
           styles={styles}
           direction="down"
           options={ISOLATION_CHOICES}
           selectedId={isolation}
-          onSelect={onSelect}
+          onSelect={onSelectIsolation}
         />
       ) : null}
-      {showBase ? (
-        <ControlChip
-          styles={styles}
-          label={baseLabel}
-          disabled={baseChoices.length === 0}
-          onPress={onToggleBase}
-        />
-      ) : null}
-      {showBase && baseOpen ? (
+      {chips.map((chip) =>
+        chip.shown ? (
+          <ControlChip
+            key={chip.id}
+            styles={styles}
+            label={chip.menu.label}
+            disabled={chip.menu.choices.length === 0}
+            onPress={() => onTogglePicker(chip.id)}
+          />
+        ) : null,
+      )}
+      {chips.map((chip) =>
+        chip.shown && picker === chip.id ? (
+          <ChoicePopover
+            key={`${chip.id}-menu`}
+            styles={styles}
+            direction="down"
+            options={chip.menu.choices}
+            selectedId={chip.menu.selectedId}
+            onSelect={chip.menu.onSelect}
+          />
+        ) : null,
+      )}
+      {picker === "host" ? (
         <ChoicePopover
           styles={styles}
           direction="down"
-          options={baseChoices}
-          selectedId={baseId}
-          onSelect={onSelectBase}
-        />
-      ) : null}
-      {hostOpen ? (
-        <ChoicePopover
-          styles={styles}
-          direction="down"
-          options={hosts}
-          selectedId={hostId}
-          onSelect={onSelectHost}
+          options={host.choices}
+          selectedId={host.selectedId}
+          onSelect={host.onSelect}
         />
       ) : null}
     </View>

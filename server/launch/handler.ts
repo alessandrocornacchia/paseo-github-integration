@@ -4,13 +4,15 @@ import type {
   BaseChoice,
   LaunchDefaults,
   launchDefaults,
+  listCheckouts,
   saveLaunchDefaults,
   sendOptions,
   sendToChat,
 } from "../../shared/board";
-import { launchCard, repositoryIdFor } from "../../shared/launch";
+import { checkedOutConflict, launchCard, listProjectCheckouts, repositoryIdFor } from "../../shared/launch";
 import type { WorktreeStart } from "../../shared/launch";
 import { baseKey, readSettings, updateSettings } from "../settings/settings";
+import { ensureLocalBranch, gitWorktrees, localBranchExists } from "./checkouts";
 import { fetchBaseBranch, findProject, remoteNameFor } from "./project-index";
 import type { PaseoApi, ProjectRecord } from "./project-index";
 
@@ -19,7 +21,7 @@ import type { PaseoApi, ProjectRecord } from "./project-index";
  * it. Both handlers below start here, so "no project" reads the same whether
  * the dialog is opening or the send is running.
  */
-async function requireProject(
+export async function requireProject(
   paseo: PaseoApi,
   repository: string,
   url: string,
@@ -36,6 +38,16 @@ async function requireProject(
     );
   }
   return project;
+}
+
+export async function listCheckoutsHandler(
+  { repository, url }: z.output<typeof listCheckouts.input>,
+  { paseo }: PluginHandlerContext,
+): Promise<z.input<typeof listCheckouts.output>> {
+  const project = await requireProject(paseo, repository, url);
+  if (project.kind !== "git") return { checkouts: [] };
+  const worktrees = await gitWorktrees(project.rootPath);
+  return { checkouts: await listProjectCheckouts(paseo, project, worktrees) };
 }
 
 export async function sendOptionsHandler(
@@ -104,11 +116,14 @@ async function saveLaunch(
  * and save the next card's defaults in the same round trip.
  */
 export async function sendToChatHandler(
-  { hostId, pullRequest, base, ...input }: z.output<typeof sendToChat.input>,
+  { hostId, pullRequest, pullRequestHead, base, ...input }: z.output<typeof sendToChat.input>,
   { paseo }: PluginHandlerContext,
 ): Promise<z.input<typeof sendToChat.output>> {
   const project = await requireProject(paseo, input.repository, input.url);
-  const start = await resolveStart(project.rootPath, input.repository, input.url, base);
+  const start =
+    input.isolation === "worktree"
+      ? await resolveStart(project.rootPath, input.repository, input.url, base, pullRequestHead)
+      : ({ kind: "default" } as const);
   const result = await launchCard(paseo, project, { ...input, start });
 
   // Saved only once the send has actually worked, so a configuration that the
@@ -129,17 +144,41 @@ export async function sendToChatHandler(
  * points at the card's repository — a fork's `upstream`, not its `origin` — and
  * that ref is fetched first, so a branch the checkout has never seen resolves.
  * No base, or no such remote, leaves the daemon on the default branch.
+ *
+ * The two starts that check a branch out rather than cut one are checked
+ * against the worktrees first, because the daemon forks instead of failing
+ * (see `WorktreeStart`): a branch some worktree already has is refused with
+ * a pointer at Existing checkout, and a pull request whose head branch is
+ * already local is checked out as that branch rather than as a `-1` copy of it.
  */
 async function resolveStart(
   root: string,
   repository: string,
   url: string,
   base: BaseChoice | null,
+  pullRequestHead: string | null,
 ): Promise<WorktreeStart> {
-  if (base?.kind === "pull-request") return { kind: "pull-request" };
+  const checkoutBranch = base?.kind === "pull-request" ? pullRequestHead : base?.checkout === true ? base.name : null;
+  if (checkoutBranch !== null) {
+    const worktrees = (await gitWorktrees(root)) ?? [];
+    const conflict = checkedOutConflict(
+      worktrees.map((worktree) => ({ ...worktree, main: false, workspaceId: null, workspaceName: null })),
+      checkoutBranch,
+    );
+    if (conflict !== null) throw new Error(conflict);
+  }
+  if (base?.kind === "pull-request") {
+    return pullRequestHead !== null && (await localBranchExists(root, pullRequestHead))
+      ? { kind: "branch", branch: pullRequestHead }
+      : { kind: "pull-request" };
+  }
   const repositoryId = repositoryIdFor(repository, url);
   const remote = repositoryId === null ? null : await remoteNameFor(root, repositoryId);
   if (base === null || remote === null) return { kind: "default" };
+  if (base.checkout === true) {
+    await ensureLocalBranch(root, remote, base.name);
+    return { kind: "branch", branch: base.name };
+  }
   await fetchBaseBranch(root, remote, base.name);
   return { kind: "ref", ref: `refs/remotes/${remote}/${base.name}` };
 }

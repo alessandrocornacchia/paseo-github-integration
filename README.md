@@ -33,9 +33,12 @@ rendered from Markdown, with images proxied through the daemon. From there: appr
 method the repository allows, edit labels, open on GitHub — or **send to chat**, which starts a
 Paseo agent with a prompt template of your choosing, in a workspace of your choosing, with the
 issue or pull request pinned to the top of the conversation. The agent can run on any connected
-Paseo host that has the repository as a project, and a new worktree can start from any branch — or,
-for a pull request, from the pull request's own branch. The last host and, per repository, the last
-base are what the next card opens on.
+Paseo host that has the repository as a project. A new worktree can start from any branch — as a
+new branch cut from it, or that branch itself checked out with no new branch on top — or, for a pull
+request, from the pull request's own branch. Or skip the new worktree entirely: **Existing
+checkout** joins a worktree or branch already on the host, whoever made it, and preselects the one
+on the pull request's branch. The last host and, per repository, the last base are what the next
+card opens on.
 
 ![One pull request open in the detail panel: title, author, branches, checks, the Approve, Merge,
 Send to chat and Open on GitHub actions, and the rendered body.](images/detail-panel.png)
@@ -91,7 +94,11 @@ inputs.paseo-github.url = "github:alysnnix/paseo-github-integration";
   of them.
 - **Another host is matched by `origin` alone.** On the board's own host a fork is found through
   its `upstream` remote too; on any other host the project's `origin` has to be the card's
-  repository, and a base branch has to have been fetched there at least once.
+  repository, and a base branch has to have been fetched there at least once. There, too,
+  Existing checkout lists only the checkouts Paseo has a workspace open on — a worktree another tool
+  made appears once Paseo has opened it — and a pull request whose branch is already local but not
+  checked out is checked out as Paseo's `<branch>-1` copy; choose the branch with Same branch
+  instead.
 - **One GitHub account at a time**, the one `gh` is authenticated as. There is no account switcher.
 - **Images hosted outside GitHub are not loaded**, deliberately: they would report your IP address
   to whoever wrote the comment. They render as a link you can open yourself.

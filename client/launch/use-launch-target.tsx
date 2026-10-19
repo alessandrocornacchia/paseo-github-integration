@@ -4,7 +4,8 @@ import { usePaseo, useRpc } from "@getpaseo/plugin/client";
 
 import type { BoardItem } from "../../shared/board";
 import { sendOptions } from "../../shared/board";
-import { findProjectByKey, repositoryIdFor } from "../../shared/launch";
+import { findProjectByKey, launchCard, repositoryIdFor } from "../../shared/launch";
+import type { LaunchInput, LaunchOutcome } from "../../shared/launch";
 import type { Choice } from "./pickers";
 
 /**
@@ -167,4 +168,32 @@ async function findRemoteProject(api: HostApi, item: BoardItem, hostLabel: strin
     rootPath: project.rootPath,
     supportsWorktree: project.kind === "git",
   };
+}
+
+/**
+ * A send to a host other than the board's, run from the dialog against that
+ * host's own API — its project as `useLaunchTarget` found it — and then the
+ * board's daemon told what to open on next. That save is not fatal: the agent
+ * is already running.
+ */
+export async function launchOnRemoteHost(
+  api: HostApi,
+  project: SendProject,
+  input: LaunchInput,
+  remember: () => Promise<unknown>,
+): Promise<LaunchOutcome> {
+  const result = await launchCard(
+    api,
+    {
+      projectId: project.id,
+      rootPath: project.rootPath,
+      displayName: project.name,
+      kind: project.supportsWorktree ? "git" : "directory",
+    },
+    input,
+  );
+  await remember().catch((cause: unknown) => {
+    console.warn("[github-board] could not save launch defaults", cause);
+  });
+  return result;
 }

@@ -81,21 +81,13 @@ export function SendDialog({
           styles={styles}
           project={dialog.project}
           isolation={dialog.isolation}
-          open={dialog.picker === "isolation"}
-          onToggle={() => dialog.togglePicker("isolation")}
-          onSelect={dialog.selectIsolation}
-          hosts={dialog.hosts}
-          hostId={dialog.hostId}
-          hostLabel={dialog.hostLabel}
-          hostOpen={dialog.picker === "host"}
-          onToggleHost={() => dialog.togglePicker("host")}
-          onSelectHost={dialog.selectHost}
-          baseChoices={dialog.baseChoices}
-          baseId={dialog.baseId}
-          baseLabel={dialog.baseLabel}
-          baseOpen={dialog.picker === "base"}
-          onToggleBase={() => dialog.togglePicker("base")}
-          onSelectBase={dialog.selectBase}
+          picker={dialog.picker}
+          onTogglePicker={dialog.togglePicker}
+          onSelectIsolation={dialog.selectIsolation}
+          host={dialog.host}
+          base={dialog.base}
+          branchMode={dialog.branchMode}
+          checkout={dialog.checkout}
         />
 
         {/* The host's input, not React Native's: it registers focus with the

@@ -8,6 +8,7 @@ import { loadItemHandler } from "./server/items/details";
 import { loadImageHandler } from "./server/images/images";
 import {
   launchDefaultsHandler,
+  listCheckoutsHandler,
   saveLaunchDefaultsHandler,
   sendOptionsHandler,
   sendToChatHandler,
@@ -32,6 +33,7 @@ import {
   launchDefaults,
   legacySettingsTaken,
   listBranches,
+  listCheckouts,
   mergePullRequest,
   saveLaunchDefaults,
   saveLogin,
@@ -57,6 +59,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(launchDefaults, launchDefaultsHandler);
   server.handle(saveLaunchDefaults, saveLaunchDefaultsHandler);
   server.handle(listBranches, listBranchesHandler);
+  server.handle(listCheckouts, listCheckoutsHandler);
   server.handle(listLabels, listLabelsHandler);
   server.handle(toggleLabel, toggleLabelHandler);
   server.handle(approvePullRequest, approveHandler);

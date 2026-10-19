@@ -183,7 +183,7 @@ function readLaunch(value: unknown): LaunchDefaults {
     model: asString(raw.model),
     modeId: asString(raw.modeId),
     thinkingOptionId: asString(raw.thinkingOptionId),
-    isolation: raw.isolation === "worktree" ? "worktree" : "local",
+    isolation: raw.isolation === "worktree" || raw.isolation === "existing" ? raw.isolation : "local",
     hostId: asString(raw.hostId),
   };
 }
@@ -197,7 +197,9 @@ function readBases(value: unknown): Record<string, BaseChoice> {
     const entry = raw as Record<string, unknown>;
     if (entry.kind === "pull-request") bases[key] = { kind: "pull-request" };
     const name = asString(entry.name);
-    if (entry.kind === "branch" && name !== null) bases[key] = { kind: "branch", name };
+    if (entry.kind === "branch" && name !== null) {
+      bases[key] = entry.checkout === true ? { kind: "branch", name, checkout: true } : { kind: "branch", name };
+    }
   }
   return bases;
 }

@@ -5,10 +5,11 @@ import { Keyboard } from "react-native";
 
 import type { BoardItem, Isolation, LaunchDefaults } from "../../shared/board";
 import { launchDefaults, saveLaunchDefaults, sendToChat } from "../../shared/board";
-import { launchCard } from "../../shared/launch";
+import type { ChipMenu } from "./isolation-control";
 import type { Choice, ModelChoice, PickerId, ProviderChoice } from "./pickers";
-import { remoteStartFor, useBaseBranch } from "./use-base-branch";
-import { type HostApi, type SendProject, useLaunchTarget } from "./use-launch-target";
+import { branchModeMenu, remoteStartFor, useBaseBranch } from "./use-base-branch";
+import { sendTarget, useCheckouts } from "./use-checkouts";
+import { type HostApi, launchOnRemoteHost, type SendProject, useLaunchTarget } from "./use-launch-target";
 
 export type { SendProject };
 
@@ -123,14 +124,12 @@ export interface UseSendDialogResult {
   prompt: string;
   setPrompt: (next: string) => void;
   project: SendProject | null;
-  hosts: readonly Choice[];
-  hostId: string;
   hostLabel: string;
-  selectHost: (id: string) => void;
-  baseChoices: readonly Choice[];
-  baseId: string | null;
-  baseLabel: string;
-  selectBase: (id: string) => void;
+  host: ChipMenu;
+  base: ChipMenu;
+  /** Null unless a new worktree starts from a branch, which can be cut or taken as is. */
+  branchMode: ChipMenu | null;
+  checkout: ChipMenu;
   error: string | null;
   busy: boolean;
   picker: PickerId | null;
@@ -261,9 +260,25 @@ export function useSendDialogState({
   });
   const { project, api: hostApi } = target;
   const baseBranch = useBaseBranch({ item, pullRequest });
+  const checkouts = useCheckouts({
+    item,
+    project,
+    api: hostApi,
+    isRemote: target.isRemote,
+    hostId: target.hostId,
+    pullRequestHead: baseBranch.pullRequestHead,
+  });
   // A worktree preference does not survive into a project with none to offer,
   // or the dialog would show a choice its own picker cannot.
   const isolation: Isolation = project?.supportsWorktree === true ? chosenIsolation : "local";
+
+  const sendable = sendTarget({
+    isolation,
+    checkouts,
+    checkoutBranch: baseBranch.checkoutBranch,
+    project,
+    hostLabel: target.hostLabel,
+  });
 
   /**
    * The snapshot is taken against the project's checkout rather than the
@@ -339,7 +354,7 @@ export function useSendDialogState({
   );
 
   const selectIsolation = useCallback((id: string) => {
-    setIsolation(id === "worktree" ? "worktree" : "local");
+    setIsolation(id === "worktree" || id === "existing" ? id : "local");
     setPicker(null);
   }, []);
 
@@ -361,6 +376,22 @@ export function useSendDialogState({
     [baseBranch],
   );
 
+  const selectBranchMode = useCallback(
+    (id: string) => {
+      baseBranch.selectBranchMode(id);
+      setPicker(null);
+    },
+    [baseBranch],
+  );
+
+  const selectCheckout = useCallback(
+    (path: string) => {
+      checkouts.select(path);
+      setPicker(null);
+    },
+    [checkouts],
+  );
+
   const selectHost = useCallback(
     (id: string) => {
       target.selectHost(id);
@@ -371,7 +402,7 @@ export function useSendDialogState({
   );
 
   const send = useCallback(() => {
-    if (configuration === null || project === null || busy) return;
+    if (configuration === null || project === null || busy || !sendable.ready) return;
     const text = prompt.trim();
     if (text === "") return;
     setBusy(true);
@@ -395,28 +426,17 @@ export function useSendDialogState({
     };
     const hostId = target.isRemote ? target.hostId : null;
     const base = isolation === "worktree" ? baseBranch.base : null;
+    const { existing } = sendable;
     const sent =
       !target.isRemote || hostApi === null
-        ? launch({ ...input, hostId, pullRequest, base })
-        : launchCard(
-            hostApi,
-            {
-              projectId: project.id,
-              rootPath: project.rootPath,
-              displayName: project.name,
-              kind: project.supportsWorktree ? "git" : "directory",
-            },
-            { ...input, start: remoteStartFor(base) },
-          ).then(async (result) => {
-            // The board's daemon never saw this send, so it is told what to
-            // open on next. Not fatal: the agent is already running.
-            const remembered =
-              base === null ? null : { repository: item.repository, url: item.url, pullRequest, choice: base };
-            await saveDefaults({ launch: { ...configuration, isolation, hostId }, base: remembered }).catch((cause: unknown) => {
-              console.warn("[github-board] could not save launch defaults", cause);
-            });
-            return result;
-          });
+        ? launch({ ...input, hostId, pullRequest, pullRequestHead: baseBranch.pullRequestHead, base, existing })
+        : launchOnRemoteHost(hostApi, project, { ...input, start: remoteStartFor(base), existing }, () =>
+            // The board's daemon never saw this send, so it is told what to open on next.
+            saveDefaults({
+              launch: { ...configuration, isolation, hostId },
+              base: base === null ? null : { repository: item.repository, url: item.url, pullRequest, choice: base },
+            }),
+          );
     sent
       .then((result) => onLaunched({ ...result, serverId: target.hostId, hostLabel: target.hostLabel }))
       .catch((cause: unknown) => {
@@ -426,9 +446,13 @@ export function useSendDialogState({
         setBusy(false);
         setError(cause instanceof Error ? cause.message : String(cause));
       });
-  }, [baseBranch.base, busy, configuration, hostApi, isolation, item, launch, onLaunched, project, prompt, pullRequest, saveDefaults, target]);
+  }, [baseBranch.base, baseBranch.pullRequestHead, busy, configuration, hostApi, isolation, item, launch, onLaunched, project, prompt, pullRequest, saveDefaults, sendable, target]);
 
-  const ready = configuration !== null && project !== null && prompt.trim() !== "";
+  const ready =
+    configuration !== null &&
+    project !== null &&
+    prompt.trim() !== "" &&
+    sendable.ready;
   const thinkingOptions = model?.thinkingOptions ?? [];
   const modes = provider?.modes ?? [];
 
@@ -436,15 +460,17 @@ export function useSendDialogState({
     prompt,
     setPrompt,
     project,
-    hosts: target.hosts,
-    hostId: target.hostId,
     hostLabel: target.hostLabel,
-    selectHost,
-    baseChoices: baseBranch.choices,
-    baseId: baseBranch.baseId,
-    baseLabel: baseBranch.label,
-    selectBase,
-    error: error ?? target.projectError,
+    host: { choices: target.hosts, selectedId: target.hostId, label: target.hostLabel, onSelect: selectHost },
+    base: { choices: baseBranch.choices, selectedId: baseBranch.baseId, label: baseBranch.label, onSelect: selectBase },
+    branchMode: branchModeMenu(baseBranch.branchMode, selectBranchMode),
+    checkout: {
+      choices: checkouts.choices,
+      selectedId: checkouts.selected?.path ?? null,
+      label: checkouts.label,
+      onSelect: selectCheckout,
+    },
+    error: error ?? target.projectError ?? sendable.error,
     busy,
     picker,
     togglePicker,

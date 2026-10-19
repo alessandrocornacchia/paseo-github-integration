@@ -1,3 +1,4 @@
+import type { Checkout, Isolation } from "./board";
 import { BOARD_ITEM_TIMELINE_KIND, BOARD_ITEM_TIMELINE_VERSION } from "./timeline";
 
 /**
@@ -12,8 +13,9 @@ import { BOARD_ITEM_TIMELINE_KIND, BOARD_ITEM_TIMELINE_VERSION } from "./timelin
  * `scripts/check-import-boundaries.mjs`), so `LaunchApi` below names only the
  * slice this module calls, and both APIs satisfy it structurally.
  *
- * Like `shared/timeline.ts`, which is its one import, this file imports nothing
- * else at runtime, so it stays loadable from the standalone server transpile.
+ * Like `shared/timeline.ts`, which is its one runtime import, this file imports
+ * nothing else at runtime — `./board` is types only — so it stays loadable from
+ * the standalone server transpile.
  */
 
 /** Workspace titles are capped at the same length the daemon caps agent titles. */
@@ -54,6 +56,7 @@ interface LaunchWorkspace {
 type WorktreeSource = { kind: "worktree"; cwd: string; projectId: string } & (
   | { action?: undefined }
   | { action: "branch-off"; refName: string }
+  | { action: "checkout"; refName: string }
   | { action: "checkout"; checkoutSource: { kind: "change_request"; forge: "github"; number: number } }
 );
 
@@ -64,6 +67,23 @@ export interface LaunchApi {
       firstAgentContext: { prompt: string; attachments: [] };
       source: WorktreeSource | { kind: "directory"; path: string; projectId: string };
     }): Promise<LaunchWorkspace>;
+    /** A workspace that already exists, which an Existing send's agent joins. */
+    ref(workspaceId: string): LaunchWorkspace;
+  };
+}
+
+/** The slice of a host's workspace list an Existing send's checkouts are read from. */
+export interface WorkspaceListApi {
+  readonly workspaces: {
+    list(options: { filter: { projectId: string } }): Promise<{
+      entries: readonly {
+        id: string;
+        name: string;
+        workspaceDirectory?: string | undefined;
+        activityAt: string | null;
+        gitRuntime?: { currentBranch?: string | null | undefined } | null | undefined;
+      }[];
+    }>;
   };
 }
 
@@ -74,10 +94,23 @@ export interface LaunchApi {
  * rather than at a local branch nobody has pulled — but only a ref the checkout
  * has fetched at least once resolves, which is why the board's own host fetches
  * it first (`sendToChatHandler`). `pull-request` has the daemon fetch and check
- * out the card's own head branch, forks included. `default` leaves the base to
- * the daemon, which branches off the checkout's default branch as it stands.
+ * out the card's own head branch, forks included. `branch` has it check out a
+ * local branch as it is, with no new branch on top — fetched from `origin`
+ * first when there is no local branch of that name yet. `default` leaves the
+ * base to the daemon, which branches off the checkout's default branch as it
+ * stands.
+ *
+ * The daemon quietly forks rather than fails in two cases a caller has to rule
+ * out first, because the fork is exactly the stray branch these starts exist to
+ * avoid: `branch` on a branch some worktree already has checked out gets a
+ * `<branch>-1` cut from it, and `pull-request` with a local branch of the head's
+ * name already there checks the pull request out as `<head>-1`.
  */
-export type WorktreeStart = { kind: "ref"; ref: string } | { kind: "pull-request" } | { kind: "default" };
+export type WorktreeStart =
+  | { kind: "ref"; ref: string }
+  | { kind: "branch"; branch: string }
+  | { kind: "pull-request" }
+  | { kind: "default" };
 
 /** Every project a host's daemon knows about, as `projects.list` reports it. */
 export interface ProjectListApi {
@@ -102,9 +135,11 @@ export interface LaunchInput {
   author: string | null;
   labels: string[];
   prompt: string;
-  isolation: "local" | "worktree";
+  isolation: Isolation;
   /** Ignored unless `isolation` is `worktree`. */
   start: WorktreeStart;
+  /** Required when `isolation` is `existing`, ignored otherwise. */
+  existing: Pick<Checkout, "path" | "workspaceId" | "workspaceName"> | null;
   provider: string;
   model: string;
   modeId: string | null;
@@ -170,14 +205,37 @@ export async function findProjectByKey(
  */
 function worktreeSource(project: LaunchProject, start: WorktreeStart, number: number): WorktreeSource {
   const where = { kind: "worktree" as const, cwd: project.rootPath, projectId: project.projectId };
-  if (start.kind === "default") return where;
-  return start.kind === "pull-request"
-    ? {
-        ...where,
-        action: "checkout",
-        checkoutSource: { kind: "change_request", forge: "github", number },
-      }
-    : { ...where, action: "branch-off", refName: start.ref };
+  switch (start.kind) {
+    case "default":
+      return where;
+    case "pull-request":
+      return { ...where, action: "checkout", checkoutSource: { kind: "change_request", forge: "github", number } };
+    case "branch":
+      // A bare `refName` with no `checkoutSource` is the daemon's checkout-branch.
+      return { ...where, action: "checkout", refName: start.branch };
+    case "ref":
+      return { ...where, action: "branch-off", refName: start.ref };
+  }
+}
+
+/**
+ * The workspace an Existing send's agent goes into: the one Paseo already has
+ * open on that directory, or else a new one on it — a worktree another tool
+ * made has none until now. Either way nothing is cut and no branch is made;
+ * the agent works on whatever the checkout has checked out.
+ */
+async function existingWorkspace(
+  paseo: LaunchApi,
+  project: LaunchProject,
+  existing: NonNullable<LaunchInput["existing"]>,
+  create: (source: { kind: "directory"; path: string; projectId: string }) => Promise<LaunchWorkspace>,
+): Promise<LaunchWorkspace> {
+  if (existing.workspaceId === null) {
+    return create({ kind: "directory", path: existing.path, projectId: project.projectId });
+  }
+  const joined = paseo.workspaces.ref(existing.workspaceId);
+  // A handle made from a bare id knows no name until refreshed; the list did.
+  return { id: joined.id, name: joined.name ?? existing.workspaceName, agents: joined.agents };
 }
 
 export async function launchCard(
@@ -185,9 +243,12 @@ export async function launchCard(
   project: LaunchProject,
   input: LaunchInput,
 ): Promise<LaunchOutcome> {
-  const { repository, number, title, url, author, labels, prompt, isolation, start } = input;
+  const { repository, number, title, url, author, labels, prompt, isolation, start, existing } = input;
   if (isolation === "worktree" && project.kind !== "git") {
     throw new Error(`${project.displayName} is not a git checkout, so it cannot be worktreed.`);
+  }
+  if (isolation === "existing" && existing === null) {
+    throw new Error("Choose the checkout to send this card to.");
   }
 
   const trimmed = title.trim();
@@ -199,24 +260,35 @@ export async function launchCard(
    * passes it and then creates nothing leaves a workspace spinning until it
    * settles on `done`.
    */
-  const workspace = await paseo.workspaces
-    .create({
-      title: (trimmed === "" ? `${repository} #${number}` : trimmed).slice(0, MAX_TITLE_CHARS),
-      firstAgentContext: { prompt, attachments: [] },
-      source:
-        isolation === "worktree"
-          ? worktreeSource(project, start, number)
-          : { kind: "directory", path: project.rootPath, projectId: project.projectId },
-    })
-    .catch((cause: unknown) => {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      if (start.kind === "ref" && detail.includes("Base branch not found")) {
-        throw new Error(
-          `${start.ref.replace(/^refs\/remotes\//, "")} has never been fetched in ${project.displayName} on that host. Run \`git fetch\` there, then send this card again.`,
+  const create = (source: Parameters<LaunchApi["workspaces"]["create"]>[0]["source"]) =>
+    paseo.workspaces
+      .create({
+        title: (trimmed === "" ? `${repository} #${number}` : trimmed).slice(0, MAX_TITLE_CHARS),
+        firstAgentContext: { prompt, attachments: [] },
+        source,
+      })
+      .catch((cause: unknown) => {
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        if (isolation === "worktree" && start.kind === "ref" && detail.includes("Base branch not found")) {
+          throw new Error(
+            `${start.ref.replace(/^refs\/remotes\//, "")} has never been fetched in ${project.displayName} on that host. Run \`git fetch\` there, then send this card again.`,
+          );
+        }
+        if (isolation === "worktree" && start.kind === "branch" && detail.includes("Unknown branch")) {
+          throw new Error(
+            `${start.branch} is neither a local branch nor on origin in ${project.displayName} on that host. Run \`git fetch\` there, then send this card again.`,
+          );
+        }
+        throw cause;
+      });
+  const workspace =
+    isolation === "existing" && existing !== null
+      ? await existingWorkspace(paseo, project, existing, create)
+      : await create(
+          isolation === "worktree"
+            ? worktreeSource(project, start, number)
+            : { kind: "directory", path: project.rootPath, projectId: project.projectId },
         );
-      }
-      throw cause;
-    });
 
   /**
    * The agent is created *in* the workspace, so the SDK places it on the
@@ -274,4 +346,82 @@ export async function launchCard(
     projectName: project.displayName,
     agentId: agent.id,
   };
+}
+
+/**
+ * `git worktree list --porcelain`, read into the checkouts it names: one block
+ * per worktree, the main checkout first. A bare repository has no files to work
+ * in and a prunable worktree's directory is gone, so neither is offered.
+ */
+export function parseWorktreeList(stdout: string): { path: string; branch: string | null }[] {
+  const worktrees: { path: string; branch: string | null }[] = [];
+  for (const block of stdout.split(/\n\s*\n/)) {
+    const lines = block.split("\n").map((line) => line.trim());
+    const path = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+    if (path === undefined || path === "") continue;
+    if (lines.some((line) => line === "bare" || line.startsWith("prunable"))) continue;
+    const ref = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length);
+    worktrees.push({ path, branch: ref === undefined ? null : ref.replace(/^refs\/heads\//, "") });
+  }
+  return worktrees;
+}
+
+function samePath(a: string, b: string): boolean {
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
+/**
+ * Every checkout of one project an Existing send can join, from what its host
+ * reports. `worktrees` is `git worktree list` where it could be run — the
+ * board's own host — and null elsewhere, where the checkouts are only those
+ * Paseo has a workspace open on, plus the project's own root.
+ *
+ * Each checkout is matched to the workspace open on its directory, the most
+ * recently active one when Local sends have stacked several on the main
+ * checkout. Main first, then by path, so the menu reads the same each time.
+ */
+export async function listProjectCheckouts(
+  paseo: WorkspaceListApi,
+  project: Pick<LaunchProject, "projectId" | "rootPath">,
+  worktrees: readonly { path: string; branch: string | null }[] | null,
+): Promise<Checkout[]> {
+  const { entries } = await paseo.workspaces.list({ filter: { projectId: project.projectId } });
+  const workspaces = [...entries]
+    .filter((entry) => typeof entry.workspaceDirectory === "string" && entry.workspaceDirectory !== "")
+    .sort((a, b) => (b.activityAt ?? "").localeCompare(a.activityAt ?? ""));
+
+  const found: { path: string; branch: string | null }[] =
+    worktrees === null
+      ? [{ path: project.rootPath, branch: null }, ...workspaces.map((entry) => ({
+          path: entry.workspaceDirectory ?? "",
+          branch: entry.gitRuntime?.currentBranch ?? null,
+        }))]
+      : [...worktrees];
+
+  const checkouts: Checkout[] = [];
+  for (const { path, branch } of found) {
+    if (checkouts.some((checkout) => samePath(checkout.path, path))) continue;
+    const workspace = workspaces.find((entry) => samePath(entry.workspaceDirectory ?? "", path));
+    checkouts.push({
+      path,
+      // git's answer when there is one; the workspace's own reading otherwise.
+      branch: branch ?? workspace?.gitRuntime?.currentBranch ?? null,
+      main: samePath(path, project.rootPath),
+      workspaceId: workspace?.id ?? null,
+      workspaceName: workspace?.name ?? null,
+    });
+  }
+  return checkouts.sort((a, b) => Number(b.main) - Number(a.main) || a.path.localeCompare(b.path));
+}
+
+/**
+ * Why a new worktree on `branch` would not be what was asked for: some checkout
+ * already has it, so the daemon would fork it instead (see `WorktreeStart`).
+ * Null when nothing does.
+ */
+export function checkedOutConflict(checkouts: readonly Checkout[], branch: string | null): string | null {
+  if (branch === null) return null;
+  const holder = checkouts.find((checkout) => checkout.branch === branch);
+  if (holder === undefined) return null;
+  return `${branch} is already checked out at ${holder.path}, so a new worktree would fork it. Choose Existing checkout to work there instead.`;
 }

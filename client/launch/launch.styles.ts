@@ -86,7 +86,18 @@ export function buildLaunchStyles({ layout }: PluginSurfaceProps, { colors, sepa
         overflow: "hidden" as const,
       },
       popoverUp: { bottom: "100%" as const, marginBottom: 6 },
-      popoverDown: { top: "100%" as const, marginTop: 6 },
+      /**
+       * The top row's menus open down over the prompt and the bottom row, which
+       * is all the card has below them — at the prompt's minimum height, less
+       * than the 240 an upward menu has. A long branch list sized to 240 ran
+       * past the card's foot, where the sheet clipped its last rows out of
+       * reach of any scroll.
+       */
+      popoverDown: {
+        top: "100%" as const,
+        marginTop: 6,
+        maxHeight: (layout.compact ? 88 : 120) + 48,
+      },
       popoverHeader: {
         flexDirection: "row" as const,
         alignItems: "center" as const,

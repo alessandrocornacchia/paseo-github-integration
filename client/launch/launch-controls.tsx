@@ -170,8 +170,11 @@ export function LaunchControls({
   onCancel: () => void;
   onSend: () => void;
 }) {
+  // Raised only for its own menus: raised for the top row's too, the two rows
+  // tie and this one, painted later, covers the menu the top row opened down.
+  const raised = picker === "model" || picker === "thinking" || picker === "mode";
   return (
-    <View style={[styles.controlRow, picker === "isolation" ? null : styles.controlRowRaised]}>
+    <View style={[styles.controlRow, raised ? styles.controlRowRaised : null]}>
       <ModelChip
         styles={styles}
         model={model}

@@ -131,6 +131,8 @@ export interface UseSendDialogResult {
   branchMode: ChipMenu | null;
   checkout: ChipMenu;
   error: string | null;
+  /** Shown when there is no error; never blocks a send. */
+  warning: string | null;
   busy: boolean;
   picker: PickerId | null;
   togglePicker: (id: PickerId) => void;
@@ -471,6 +473,7 @@ export function useSendDialogState({
       onSelect: selectCheckout,
     },
     error: error ?? target.projectError ?? sendable.error,
+    warning: sendable.warning,
     busy,
     picker,
     togglePicker,

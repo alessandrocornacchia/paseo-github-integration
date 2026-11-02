@@ -104,7 +104,11 @@ export function SendDialog({
           placeholderTextColor={styles.subtle.color}
         />
 
-        {dialog.error === null ? null : <Text style={styles.danger}>{dialog.error}</Text>}
+        {dialog.error !== null ? (
+          <Text style={styles.danger}>{dialog.error}</Text>
+        ) : dialog.warning !== null ? (
+          <Text style={styles.subtle}>⚠ {dialog.warning}</Text>
+        ) : null}
 
         {/* Catches the press that closes an open popover, everywhere the popover
             and the control rows are not. It sits above the header and the prompt

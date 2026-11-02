@@ -122,11 +122,10 @@ export function useCheckouts({
 /**
  * What the chosen isolation needs from the checkouts before a send can go.
  *
- * `error` is why it cannot go as configured, before it is tried: a new worktree
- * that would check out a branch some checkout already holds — which the daemon
- * answers by quietly forking it — or an Existing send with nothing to join.
- * The board's own host checks the first again with git at send time; on any
- * other host this is the only check there is. `existing` is the checkout an
+ * `error` is why it cannot go as configured, before it is tried: an Existing
+ * send with nothing to join. `warning` is what will happen that may not be
+ * what was meant: a new worktree on a branch some checkout already holds,
+ * which the daemon forks as `<branch>-1` rather than checking out. `existing` is the checkout an
  * Existing send joins, and `ready` is false while one is still being looked up.
  */
 export function sendTarget({
@@ -142,18 +141,18 @@ export function sendTarget({
   /** The project and host, as the message names them. */
   project: SendProject | null;
   hostLabel: string;
-}): { error: string | null; ready: boolean; existing: Checkout | null } {
+}): { error: string | null; warning: string | null; ready: boolean; existing: Checkout | null } {
   if (isolation === "worktree") {
-    const error = checkedOutConflict(checkouts.checkouts ?? [], checkoutBranch);
-    return { error, ready: error === null, existing: null };
+    const warning = checkedOutConflict(checkouts.checkouts ?? [], checkoutBranch);
+    return { error: null, warning, ready: true, existing: null };
   }
-  if (isolation === "local") return { error: null, ready: true, existing: null };
+  if (isolation === "local") return { error: null, warning: null, ready: true, existing: null };
   const { selected } = checkouts;
   const error =
     checkouts.checkouts !== null && selected === null
       ? `${project?.name ?? "This project"} has no checkout on ${hostLabel} that Paseo can see.`
       : null;
-  return { error, ready: selected !== null, existing: selected };
+  return { error, warning: null, ready: selected !== null, existing: selected };
 }
 
 function checkoutLabel(checkout: Checkout): string {

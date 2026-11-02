@@ -415,13 +415,14 @@ export async function listProjectCheckouts(
 }
 
 /**
- * Why a new worktree on `branch` would not be what was asked for: some checkout
- * already has it, so the daemon would fork it instead (see `WorktreeStart`).
- * Null when nothing does.
+ * What a new worktree on `branch` will do instead of checking it out: some
+ * checkout already has it, so the daemon forks it as `<branch>-1` (see
+ * `WorktreeStart`). A warning, not a refusal — a fix branch cut from the pull
+ * request's own head is a fine thing to want. Null when nothing holds it.
  */
 export function checkedOutConflict(checkouts: readonly Checkout[], branch: string | null): string | null {
   if (branch === null) return null;
   const holder = checkouts.find((checkout) => checkout.branch === branch);
   if (holder === undefined) return null;
-  return `${branch} is already checked out at ${holder.path}, so a new worktree would fork it. Choose Existing checkout to work there instead.`;
+  return `${branch} is already checked out at ${holder.path}, so the new worktree will fork it as ${branch}-1. Choose Existing checkout to work there instead.`;
 }

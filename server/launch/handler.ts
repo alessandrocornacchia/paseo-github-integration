@@ -9,7 +9,7 @@ import type {
   sendOptions,
   sendToChat,
 } from "../../shared/board";
-import { checkedOutConflict, launchCard, listProjectCheckouts, repositoryIdFor } from "../../shared/launch";
+import { launchCard, listProjectCheckouts, repositoryIdFor } from "../../shared/launch";
 import type { WorktreeStart } from "../../shared/launch";
 import { baseKey, readSettings, updateSettings } from "../settings/settings";
 import { ensureLocalBranch, gitWorktrees, localBranchExists } from "./checkouts";
@@ -145,11 +145,11 @@ export async function sendToChatHandler(
  * that ref is fetched first, so a branch the checkout has never seen resolves.
  * No base, or no such remote, leaves the daemon on the default branch.
  *
- * The two starts that check a branch out rather than cut one are checked
- * against the worktrees first, because the daemon forks instead of failing
- * (see `WorktreeStart`): a branch some worktree already has is refused with
- * a pointer at Existing checkout, and a pull request whose head branch is
- * already local is checked out as that branch rather than as a `-1` copy of it.
+ * A branch some worktree already has is left to the daemon, which forks it as
+ * `<branch>-1` (see `WorktreeStart`); the dialog warns about that beforehand
+ * rather than refusing it, since a fix branch off a pull request's head is a
+ * legitimate ask. A pull request whose head branch is already local but not
+ * checked out is checked out as that branch rather than as a `-1` copy of it.
  */
 async function resolveStart(
   root: string,
@@ -158,15 +158,6 @@ async function resolveStart(
   base: BaseChoice | null,
   pullRequestHead: string | null,
 ): Promise<WorktreeStart> {
-  const checkoutBranch = base?.kind === "pull-request" ? pullRequestHead : base?.checkout === true ? base.name : null;
-  if (checkoutBranch !== null) {
-    const worktrees = (await gitWorktrees(root)) ?? [];
-    const conflict = checkedOutConflict(
-      worktrees.map((worktree) => ({ ...worktree, main: false, workspaceId: null, workspaceName: null })),
-      checkoutBranch,
-    );
-    if (conflict !== null) throw new Error(conflict);
-  }
   if (base?.kind === "pull-request") {
     return pullRequestHead !== null && (await localBranchExists(root, pullRequestHead))
       ? { kind: "branch", branch: pullRequestHead }

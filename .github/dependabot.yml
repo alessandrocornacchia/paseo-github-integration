@@ -3,15 +3,24 @@ updates:
   # One entry, because the repository root is the plugin root: one
   # package.json, one lockfile.
   #
-  # Everything is collapsed into a single group on purpose:
+  # Everything is collapsed into two groups on purpose:
   # @getpaseo/plugin peer-depends on the exact @getpaseo/client it ships
   # against, so a PR that bumps one without the other fails ERESOLVE. Grouping
-  # keeps them moving together, and keeps this to at most one PR.
+  # keeps them moving together, and keeps this to at most two PRs.
+  #
+  # The Paseo SDK gets its own group, listed first because Dependabot puts a
+  # dependency in the first group that matches. That PR is the one
+  # .github/workflows/paseo-compat.yml checks and, if the bump breaks the
+  # plugin, asks Claude to fix on the same branch; keeping it apart from
+  # unrelated bumps keeps that fix about the SDK alone.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     groups:
+      paseo:
+        patterns:
+          - "@getpaseo/*"
       all-dependencies:
         patterns:
           - "*"

@@ -19,8 +19,8 @@ const getPaseoClient = multiHost.getPaseoClient;
 const NO_HOSTS: readonly never[] = [];
 const useHosts = multiHost.useHosts ?? (() => NO_HOSTS);
 
-/** A host's whole API, as both `usePaseo()` and `getPaseoClient()` return it. */
-export type HostApi = ReturnType<typeof usePaseo>;
+/** A host's whole API, as `getPaseoClient()` returns it; `usePaseo()` returns a subtype. */
+export type HostApi = ReturnType<typeof pluginClient.getPaseoClient>;
 
 export interface SendProject {
   id: string;
